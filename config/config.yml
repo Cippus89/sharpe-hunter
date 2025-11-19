@@ -1,0 +1,15 @@
+snapshot_path: data/snapshots/sample_snapshot.csv
+industry_name: sample_utilities
+features:
+  core: [PE, PB, DividendYield, ROE]
+  optional: [PS, DebtEq, ProfitMargin]
+price_history:
+  start: 2020-01-01
+  end: null
+  interval: 1d
+  cache_days: 2
+regression:
+  log_price: false
+backtest:
+  holding_period_days: 126
+  top_quantile: 0.2

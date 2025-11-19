@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+data/prices/
+data/fundamentals/*
+logs/*
