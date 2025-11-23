@@ -4,3 +4,5 @@ statsmodels>=0.13
 yfinance>=0.2
 pandas-datareader>=0.10
 simfin>=0.8
+PyYAML>=6.0
+matplotlib>=3.7
