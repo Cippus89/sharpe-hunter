@@ -43,7 +43,27 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -e .[dev]
 ```
 
-## Run offline
+## Run offline with Yahoo Finance
+
+```bash
+python run_walk_forward.py \
+  --ticker SPY \
+  --start 2000-01-01 \
+  --end 2026-06-27 \
+  --output data/outputs/spy_run \
+  --config configs/default.yaml
+```
+
+Yahoo examples:
+
+```text
+SPY       US ETF example
+QQQ       Nasdaq-100 ETF example
+SWDA.MI   iShares Core MSCI World UCITS ETF on Borsa Italiana
+IMIE.MI   SPDR MSCI ACWI IMI UCITS ETF on Borsa Italiana
+```
+
+## Run offline with CSV
 
 ```bash
 python run_walk_forward.py \
@@ -66,16 +86,23 @@ The default price column is `Adj Close`.
 streamlit run app.py
 ```
 
+The dashboard supports two data sources:
+
+```text
+Yahoo Finance ticker download
+CSV upload
+```
+
 ## Outputs
 
 The runner saves both Parquet and CSV versions of:
 
 ```text
 daily_state_distributions
- daily_transition_matrices
- daily_state_probabilities
- model_diagnostics
- audit_table
+daily_transition_matrices
+daily_state_probabilities
+model_diagnostics
+audit_table
 ```
 
 The app exposes raw states (`state_0`, `state_1`, `state_2`) and aligned states (`low`, `mid`, `high`) to reduce label-switching confusion.

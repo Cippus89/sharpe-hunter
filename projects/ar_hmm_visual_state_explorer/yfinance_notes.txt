@@ -1,0 +1,1 @@
+Yahoo Finance support was added as an alternative to CSV upload for quick research runs.

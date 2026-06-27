@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from arhmm_explorer import ARHMM, RunConfig, prepare_observations
+from arhmm_explorer import ARHMM, RunConfig, prepare_observations, yfinance_to_price_df
 
 
 def test_prepare_observations_smoke() -> None:
@@ -12,6 +12,22 @@ def test_prepare_observations_smoke() -> None:
     prepared = prepare_observations(pd.DataFrame({"date": dates, "price": prices}), RunConfig(initial_train_years=1))
     assert {"return", "ewma_volatility", "log_ewma_volatility"}.issubset(prepared.columns)
     assert np.isfinite(prepared["log_ewma_volatility"]).all()
+
+
+def test_yfinance_to_price_df_flat_columns() -> None:
+    dates = pd.date_range("2020-01-01", periods=5, freq="B")
+    raw = pd.DataFrame({"Open": [99, 100, 101, 102, 103], "Close": [100, 101, 102, 103, 104], "Adj Close": [98, 99, 100, 101, 102]}, index=dates)
+    out = yfinance_to_price_df(raw, ticker="SPY")
+    assert list(out.columns) == ["date", "price"]
+    assert out["price"].tolist() == [98, 99, 100, 101, 102]
+
+
+def test_yfinance_to_price_df_multiindex_columns() -> None:
+    dates = pd.date_range("2020-01-01", periods=5, freq="B")
+    cols = pd.MultiIndex.from_product([["SPY"], ["Open", "Close", "Adj Close"]])
+    raw = pd.DataFrame([[99, 100, 98], [100, 101, 99], [101, 102, 100], [102, 103, 101], [103, 104, 102]], index=dates, columns=cols)
+    out = yfinance_to_price_df(raw, ticker="SPY")
+    assert out["price"].tolist() == [98, 99, 100, 101, 102]
 
 
 def test_arhmm_fit_smoke() -> None:

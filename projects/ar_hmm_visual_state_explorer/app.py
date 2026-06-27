@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from io import BytesIO
 
 import numpy as np
@@ -12,9 +13,11 @@ from arhmm_explorer import (
     data_quality_report,
     gaussian_density_series,
     load_price_csv,
+    load_yfinance_price_history,
     prepare_observations,
     run_walk_forward,
 )
+
 
 def _line(df: pd.DataFrame, x: str, y: str, title: str) -> go.Figure:
     fig = go.Figure()
@@ -60,13 +63,34 @@ def _transition_heatmap(df: pd.DataFrame, selected_date, aligned: bool) -> go.Fi
     fig.update_layout(title=f"Transition matrix: {pd.Timestamp(row['date']).date()}", xaxis_title="to", yaxis_title="from")
     return fig
 
+
+@st.cache_data(show_spinner=False)
+def _download_yahoo_cached(ticker: str, start: str, end: str | None, price_column: str) -> pd.DataFrame:
+    cfg = RunConfig(price_column=price_column)
+    return load_yfinance_price_history(ticker=ticker, start=start, end=end, config=cfg)
+
+
+def _data_signature(source: str, **kwargs) -> tuple:
+    return tuple([source, *sorted(kwargs.items())])
+
+
 st.set_page_config(page_title="AR-HMM Visual State Explorer", layout="wide")
 st.title("AR-HMM Visual State Explorer")
 st.caption("3-state AR-HMM on daily return and log EWMA volatility. No trading rules.")
 
 with st.sidebar:
-    uploaded = st.file_uploader("Upload price CSV", type="csv")
-    date_column = st.text_input("Date column", "Date")
+    source = st.radio("Data source", ["Yahoo Finance", "CSV upload"], horizontal=True)
+    if source == "Yahoo Finance":
+        ticker = st.text_input("Yahoo ticker", "SPY").strip().upper()
+        start_date = st.date_input("Start date", value=date(2000, 1, 1))
+        end_date = st.date_input("End date", value=date.today())
+        date_column = "Date"
+    else:
+        uploaded = st.file_uploader("Upload price CSV", type="csv")
+        date_column = st.text_input("Date column", "Date")
+        ticker = ""
+        start_date = None
+        end_date = None
     price_column = st.text_input("Price column", "Adj Close")
     ewma_lambda = st.slider("EWMA lambda", 0.80, 0.99, 0.94, 0.01)
     initial_train_years = st.number_input("Initial training years", 1, 30, 10)
@@ -76,10 +100,6 @@ with st.sidebar:
     random_seed = st.number_input("Random seed", 0, 999999, 42)
     aligned = st.toggle("Use aligned low/mid/high states", True)
     run_button = st.button("Run walk-forward", type="primary")
-
-if uploaded is None:
-    st.info("Upload a CSV with Date and price columns. Default price column: Adj Close.")
-    st.stop()
 
 cfg = RunConfig(
     date_column=date_column,
@@ -93,11 +113,30 @@ cfg = RunConfig(
 )
 
 try:
-    price_df = load_price_csv(BytesIO(uploaded.getvalue()), cfg)
+    if source == "Yahoo Finance":
+        if not ticker:
+            st.info("Insert a Yahoo Finance ticker, for example SPY, QQQ, IWDA.AS, IMIE.MI, or SWDA.MI.")
+            st.stop()
+        if start_date >= end_date:
+            st.error("Start date must be before end date.")
+            st.stop()
+        data_signature = _data_signature(source, ticker=ticker, start=str(start_date), end=str(end_date), price_column=price_column)
+        with st.spinner(f"Downloading {ticker} from Yahoo Finance..."):
+            price_df = _download_yahoo_cached(ticker, str(start_date), str(end_date), price_column)
+    else:
+        if uploaded is None:
+            st.info("Upload a CSV with Date and price columns, or switch to Yahoo Finance in the sidebar.")
+            st.stop()
+        data_signature = _data_signature(source, file_name=uploaded.name, file_size=uploaded.size, date_column=date_column, price_column=price_column)
+        price_df = load_price_csv(BytesIO(uploaded.getvalue()), cfg)
     prepared = prepare_observations(price_df, cfg)
 except Exception as exc:
     st.error(f"Data error: {exc}")
     st.stop()
+
+current_signature = (data_signature, tuple(sorted(cfg.__dict__.items())))
+if st.session_state.get("run_signature") != current_signature:
+    st.session_state.pop("outputs", None)
 
 tabs = st.tabs([
     "Data Quality",
@@ -119,6 +158,7 @@ with tabs[0]:
 if run_button:
     with st.spinner("Fitting daily expanding-window AR-HMM. This can be slow."):
         st.session_state.outputs = run_walk_forward(prepared, cfg)
+        st.session_state.run_signature = current_signature
 
 outputs = st.session_state.get("outputs")
 if outputs is None:

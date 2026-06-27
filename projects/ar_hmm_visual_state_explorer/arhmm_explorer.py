@@ -83,6 +83,63 @@ def load_price_csv(path_or_buffer, config: RunConfig) -> pd.DataFrame:
     return out
 
 
+def load_yfinance_price_history(
+    ticker: str,
+    start: str | pd.Timestamp,
+    end: str | pd.Timestamp | None,
+    config: RunConfig,
+    interval: str = "1d",
+) -> pd.DataFrame:
+    """Download a single ticker with yfinance and return canonical date/price columns."""
+    ticker = ticker.strip().upper()
+    if not ticker:
+        raise ValueError("Ticker cannot be empty.")
+    try:
+        import yfinance as yf
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("Install yfinance or run: pip install -e .") from exc
+
+    raw = yf.download(
+        ticker,
+        start=start,
+        end=end,
+        interval=interval,
+        auto_adjust=False,
+        progress=False,
+        threads=False,
+    )
+    return yfinance_to_price_df(raw, ticker=ticker, preferred_price_column=config.price_column)
+
+
+def yfinance_to_price_df(raw: pd.DataFrame, ticker: str, preferred_price_column: str = "Adj Close") -> pd.DataFrame:
+    """Normalize yfinance output into the canonical date/price schema.
+
+    This helper is deliberately separated from the network call so it can be
+    unit-tested without hitting Yahoo Finance.
+    """
+    if raw is None or raw.empty:
+        raise ValueError(f"No data returned by yfinance for {ticker}.")
+    df = _select_yfinance_table(raw.copy(), ticker)
+    df = df.reset_index()
+    date_col = "Date" if "Date" in df.columns else df.columns[0]
+    price_col = None
+    for candidate in (preferred_price_column, "Adj Close", "Close", "adj_close", "close"):
+        if candidate in df.columns:
+            price_col = candidate
+            break
+    if price_col is None:
+        available = ", ".join(map(str, df.columns))
+        raise ValueError(f"Could not find a usable yfinance price column. Available columns: {available}")
+    out = df.rename(columns={date_col: "date", price_col: "price"})[["date", "price"]]
+    out["date"] = pd.to_datetime(out["date"], errors="coerce")
+    out["price"] = pd.to_numeric(out["price"], errors="coerce")
+    out = out.dropna().sort_values("date").drop_duplicates("date", keep="last")
+    out = out.loc[out["price"] > 0].reset_index(drop=True)
+    if out.empty:
+        raise ValueError(f"No valid positive prices returned by yfinance for {ticker}.")
+    return out
+
+
 def prepare_observations(price_df: pd.DataFrame, config: RunConfig) -> pd.DataFrame:
     df = price_df.copy()
     df["return"] = np.log(df["price"] / df["price"].shift(1))
@@ -411,6 +468,22 @@ def _probability_row(date, raw_probs, order):
     return row
 
 
+def _select_yfinance_table(raw: pd.DataFrame, ticker: str) -> pd.DataFrame:
+    if not isinstance(raw.columns, pd.MultiIndex):
+        return raw
+    ticker = ticker.upper()
+    for level in range(raw.columns.nlevels):
+        values = [str(v).upper() for v in raw.columns.get_level_values(level)]
+        if ticker in values:
+            return raw.xs(raw.columns.get_level_values(level)[values.index(ticker)], axis=1, level=level)
+    # Fallback for a single-ticker MultiIndex where the remaining level contains OHLC fields.
+    for level in range(raw.columns.nlevels):
+        labels = set(map(str, raw.columns.get_level_values(level)))
+        if {"Open", "High", "Low", "Close"}.intersection(labels):
+            return raw.droplevel([lvl for lvl in range(raw.columns.nlevels) if lvl != level], axis=1)
+    raise ValueError("Could not normalize yfinance MultiIndex columns.")
+
+
 def _first_walk_forward_index(df: pd.DataFrame, years: int) -> int:
     cutoff = pd.Timestamp(df["date"].iloc[0]) + pd.DateOffset(years=years)
     idxs = np.flatnonzero(pd.to_datetime(df["date"]) >= cutoff)
@@ -476,13 +549,22 @@ def _regularize_cov(cov, floor):
 
 def cli_main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--input", help="CSV file with Date and price columns.")
+    source.add_argument("--ticker", help="Ticker to download from Yahoo Finance, for example SPY or IMIE.MI.")
+    parser.add_argument("--start", help="Yahoo Finance start date, YYYY-MM-DD. Required with --ticker.")
+    parser.add_argument("--end", default=None, help="Yahoo Finance end date, YYYY-MM-DD. Optional with --ticker.")
     parser.add_argument("--output", required=True)
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--max-refits", type=int, default=None)
     args = parser.parse_args()
     cfg = load_config(args.config, {"max_refits": args.max_refits})
-    price = load_price_csv(args.input, cfg)
+    if args.ticker:
+        if not args.start:
+            parser.error("--start is required when using --ticker")
+        price = load_yfinance_price_history(args.ticker, args.start, args.end, cfg)
+    else:
+        price = load_price_csv(args.input, cfg)
     prepared = prepare_observations(price, cfg)
     print(json.dumps(data_quality_report(price, prepared), indent=2))
     outputs = run_walk_forward(prepared, cfg)

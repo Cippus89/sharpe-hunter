@@ -1,0 +1,1 @@
+python run_walk_forward.py --ticker SPY --start 2010-01-01 --end 2020-01-01 --output data/outputs/spy_smoke --max-refits 2
